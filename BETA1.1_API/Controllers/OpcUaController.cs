@@ -519,8 +519,7 @@ namespace MyOpcUaApi.Controllers
 
             foreach (var coluna in tagColunas)
             {
-                // Ignora colunas que já são _valor ou _displayname
-                if (!coluna.Contains("s=\"") || coluna.EndsWith("_valor") || coluna.EndsWith("_displayname"))
+                if (!coluna.Contains("s=\"") || coluna.EndsWith("_valor") || coluna.EndsWith("_displayname") || coluna.EndsWith("_tipo"))
                     continue;
 
                 string novaTag = coluna.Replace(trechoAntigo, request.NovoPrefixo);
@@ -530,28 +529,31 @@ namespace MyOpcUaApi.Controllers
                     var valorLido = await _appManager.ReadOpcUaTag(novaTag);
                     var valorConvertido = DatabaseManager.ConvertTagValue(valorLido);
                     var displayName = _appManager.GetOpcUaNodeDisplayName(novaTag);
+                    var tipo = valorLido?.GetType().Name ?? "null";
 
                     Console.WriteLine($"[DEBUG] Tag original da tabela: {coluna}");
                     Console.WriteLine($"[DEBUG] Nova tag gerada: {novaTag}");
-                    Console.WriteLine($"[DEBUG] Valor lido do CLP: {valorLido} | Tipo: {valorLido?.GetType().Name}");
+                    Console.WriteLine($"[DEBUG] Valor lido do CLP: {valorLido} | Tipo: {tipo}");
                     Console.WriteLine($"[DEBUG] Valor convertido: {valorConvertido}");
                     Console.WriteLine($"[DEBUG] Display Name: {displayName}");
 
                     string colunaValor = $"{coluna}_valor";
                     string colunaDisplayName = $"{coluna}_displayname";
+                    string colunaTipo = $"{coluna}_tipo";
 
-                    // Preenche o dicionário de inserção
                     valoresParaInserir[coluna] = novaTag;
                     valoresParaInserir[colunaValor] = valorConvertido;
                     valoresParaInserir[colunaDisplayName] = displayName;
+                    valoresParaInserir[colunaTipo] = tipo;
 
-                    // Preenche o dicionário de retorno
                     valoresParaRetorno[coluna] = novaTag;
                     valoresParaRetorno[colunaValor] = valorConvertido;
                     valoresParaRetorno[colunaDisplayName] = displayName;
+                    valoresParaRetorno[colunaTipo] = tipo;
 
                     Console.WriteLine($"[INSERT] {colunaValor} => {valorConvertido}");
                     Console.WriteLine($"[INSERT] {colunaDisplayName} => {displayName}");
+                    Console.WriteLine($"[INSERT] {colunaTipo} => {tipo}");
                 }
                 catch
                 {
@@ -562,6 +564,7 @@ namespace MyOpcUaApi.Controllers
                     });
                 }
             }
+
 
 
             try

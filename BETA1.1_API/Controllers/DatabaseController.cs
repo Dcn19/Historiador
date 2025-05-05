@@ -670,8 +670,8 @@ SET tipo_dado = EXCLUDED.tipo_dado,
                 var result = _databaseManager.GetTableData(tableName, connectionString);
                 var listaSomenteTags = new List<Dictionary<string, object>>();
 
-                // Cabeçalho com tags selecionadas
-                var tagSelecionadasObj = new Dictionary<string, object>();
+                // Cabeçalho apenas com display names
+                var cabecalho = new Dictionary<string, object>();
                 int contador = 1;
 
                 var primeiraLinha = result.FirstOrDefault();
@@ -679,42 +679,28 @@ SET tipo_dado = EXCLUDED.tipo_dado,
                 {
                     foreach (var coluna in primeiraLinha.Keys)
                     {
-                        if (!coluna.Equals("equipamento") &&
-                            !coluna.EndsWith("_valor") &&
-                            !coluna.EndsWith("_displayname") &&
-                            !coluna.Equals("id", StringComparison.OrdinalIgnoreCase) &&
-                            !coluna.Equals("timestamp", StringComparison.OrdinalIgnoreCase))
+                        if (coluna.EndsWith("_displayname"))
                         {
-                            // Tag completa (nodeId)
-                            tagSelecionadasObj[$"Tag selecionada{contador:00}"] = coluna;
-
-                            // Tenta pegar o displayname correspondente
-                            string chaveDisplay = $"{coluna}_displayname";
-                            if (primeiraLinha.ContainsKey(chaveDisplay))
+                            var displayName = primeiraLinha[coluna]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(displayName))
                             {
-                                var displayName = primeiraLinha[chaveDisplay]?.ToString();
-                                if (!string.IsNullOrWhiteSpace(displayName))
-                                {
-                                    tagSelecionadasObj[$"Tag name {contador:00}"] = displayName;
-                                }
+                                cabecalho[$"Tag name {contador:00}"] = displayName;
+                                contador++;
                             }
-
-                            contador++;
                         }
                     }
                 }
 
-                // Adiciona o cabeçalho à lista
-                listaSomenteTags.Add(tagSelecionadasObj);
+                listaSomenteTags.Add(cabecalho);
 
-                // Linhas de dados com tags e equipamento
+                // Linhas de dados reais com valor + tipo agrupados
                 foreach (var linha in result)
                 {
-                    var soTags = new Dictionary<string, object>();
+                    var linhaTags = new Dictionary<string, object>();
 
                     if (linha.ContainsKey("equipamento"))
                     {
-                        soTags["equipamento"] = linha["equipamento"];
+                        linhaTags["equipamento"] = linha["equipamento"];
                     }
 
                     foreach (var coluna in linha)
@@ -724,14 +710,22 @@ SET tipo_dado = EXCLUDED.tipo_dado,
                             var baseTag = coluna.Key.Replace("_displayname", "");
                             var displayName = coluna.Value?.ToString();
 
-                            if (!string.IsNullOrWhiteSpace(displayName) && linha.ContainsKey($"{baseTag}_valor"))
+                            if (!string.IsNullOrWhiteSpace(displayName) &&
+                                linha.ContainsKey($"{baseTag}_valor"))
                             {
-                                soTags[displayName] = linha[$"{baseTag}_valor"];
+                                var valor = linha[$"{baseTag}_valor"]?.ToString();
+                                var tipo = linha.ContainsKey($"{baseTag}_tipo") ? linha[$"{baseTag}_tipo"]?.ToString() : "";
+
+                                linhaTags[displayName] = new
+                                {
+                                    valor,
+                                    tipo
+                                };
                             }
                         }
                     }
 
-                    listaSomenteTags.Add(soTags);
+                    listaSomenteTags.Add(linhaTags);
                 }
 
                 return Ok(new
@@ -752,7 +746,6 @@ SET tipo_dado = EXCLUDED.tipo_dado,
                 });
             }
         }
-
 
 
         /// <summary>

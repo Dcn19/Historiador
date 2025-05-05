@@ -118,10 +118,20 @@ ON CONFLICT (node_id) DO UPDATE SET tipo_dado = EXCLUDED.tipo_dado, display_name
         foreach (var tag in selectedTags)
         {
             string nodeId = tag.NodeId;
-            string escaped = nodeId.Replace("\"", "\"\""); // escapa as aspas para o PostgreSQL
-            columns.Add(new(0, escaped, escaped, "text", formattedTableName));
-            columns.Add(new(0, $"{escaped}_valor", $"{escaped}_valor", "text", formattedTableName));
+
+            // Evita criar colunas baseadas em campos auxiliares
+            if (nodeId.EndsWith("_valor") || nodeId.EndsWith("_displayname") || nodeId.EndsWith("_tipo"))
+                continue;
+
+            string escaped = nodeId.Replace("\"", "\"\"");
+
+            columns.Add(new(0, escaped, escaped, "text", formattedTableName));                    // tag
+            columns.Add(new(0, $"{escaped}_valor", $"{escaped}_valor", "text", formattedTableName));   // valor
+            columns.Add(new(0, $"{escaped}_displayname", $"{escaped}_displayname", "text", formattedTableName)); // displayname
+            columns.Add(new(0, $"{escaped}_tipo", $"{escaped}_tipo", "text", formattedTableName));     // tipo
         }
+
+
 
         if (!_databaseManager.TableExists(formattedTableName, connectionString))
             _databaseManager.CreateTable(formattedTableName, columns, connectionString);
@@ -136,6 +146,4 @@ ON CONFLICT (node_id) DO UPDATE SET tipo_dado = EXCLUDED.tipo_dado, display_name
             tableName = formattedTableName
         };
     }
-
-
 }
