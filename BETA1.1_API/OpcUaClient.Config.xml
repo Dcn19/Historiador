@@ -1,0 +1,37 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ApplicationConfiguration xmlns="http://opcfoundation.org/UA/SDK/Configuration.xsd">
+	<ApplicationName>OPCUA_Client</ApplicationName>
+	<ApplicationUri>urn:localhost:OPCUA_Client</ApplicationUri>
+	<ProductUri>urn:OPCUA_Client</ProductUri>
+	<ApplicationType>Client_1</ApplicationType>
+	<SecurityConfiguration>
+		<ApplicationCertificate>
+			<StoreType>Directory</StoreType>
+			<StorePath>%LocalApplicationData%/OPC Foundation/CertificateStores/MachineDefault</StorePath>
+			<SubjectName>CN=OPCUA_Client, O=OPC Foundation, DC=localhost</SubjectName>
+		</ApplicationCertificate>
+		<TrustedPeerCertificates>
+			<StoreType>Directory</StoreType>
+			<StorePath>%LocalApplicationData%/OPC Foundation/CertificateStores/UA Applications</StorePath>
+		</TrustedPeerCertificates>
+		<TrustedIssuerCertificates>
+			<StoreType>Directory</StoreType>
+			<StorePath>%LocalApplicationData%/OPC Foundation/CertificateStores/UA Certificate Authorities</StorePath>
+		</TrustedIssuerCertificates>
+		<RejectedCertificateStore>
+			<StoreType>Directory</StoreType>
+			<StorePath>%LocalApplicationData%/OPC Foundation/CertificateStores/RejectedCertificates</StorePath>
+		</RejectedCertificateStore>
+	</SecurityConfiguration>
+	<TransportConfigurations />
+	<TransportQuotas>
+		<OperationTimeout>15000</OperationTimeout>
+	</TransportQuotas>
+	<ClientConfiguration>
+		<DefaultSessionTimeout>60000</DefaultSessionTimeout>
+		<WellKnownDiscoveryUrls>
+			<Url>opc.tcp://localhost:4840</Url>
+		</WellKnownDiscoveryUrls>
+	</ClientConfiguration>
+</ApplicationConfiguration>
+
