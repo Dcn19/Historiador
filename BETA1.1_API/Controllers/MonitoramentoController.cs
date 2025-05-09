@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Threading.Tasks;
 using CoreServices;
+using CoreServices.Services;
 
 namespace MyOpcUaApi.Controllers
 {
@@ -50,7 +51,6 @@ namespace MyOpcUaApi.Controllers
                 // 3️⃣ Tenta se conectar a todos os bancos encontrados
                 foreach (var dbName in databases)
                 {
-                    // Substitui o nome do banco na connection string base
                     var csb = new Npgsql.NpgsqlConnectionStringBuilder(connectionStringBase)
                     {
                         Database = dbName
@@ -60,8 +60,12 @@ namespace MyOpcUaApi.Controllers
                     Console.WriteLine($"[DEBUG] Adicionando conexão com banco '{dbName}': {adicionado}");
                 }
 
+                // 🔧 Garante que o MonitoramentoService foi instanciado
+                var _ = HttpContext.RequestServices.GetService<MonitoramentoService>();
+
                 // 4️⃣ Inicia o monitoramento
                 await _appManager.StartMonitoring();
+
                 stopwatch.Stop();
 
                 return Ok(new MonitoramentoResponse

@@ -668,71 +668,55 @@ SET tipo_dado = EXCLUDED.tipo_dado,
             try
             {
                 var result = _databaseManager.GetTableData(tableName, connectionString);
-                var listaSomenteTags = new List<Dictionary<string, object>>();
 
-                // Cabeçalho apenas com display names
-                var cabecalho = new Dictionary<string, object>();
+                var tagsSelecionadas = new Dictionary<string, object>();
+                var equipamentosDict = new Dictionary<string, Dictionary<string, object>>();
                 int contador = 1;
 
-                var primeiraLinha = result.FirstOrDefault();
-                if (primeiraLinha != null)
-                {
-                    foreach (var coluna in primeiraLinha.Keys)
-                    {
-                        if (coluna.EndsWith("_displayname"))
-                        {
-                            var displayName = primeiraLinha[coluna]?.ToString();
-                            if (!string.IsNullOrWhiteSpace(displayName))
-                            {
-                                cabecalho[$"Tag name {contador:00}"] = displayName;
-                                contador++;
-                            }
-                        }
-                    }
-                }
-
-                listaSomenteTags.Add(cabecalho);
-
-                // Linhas de dados reais com valor + tipo agrupados
                 foreach (var linha in result)
                 {
-                    var linhaTags = new Dictionary<string, object>();
+                    string equipamento = linha.ContainsKey("equipamento") ? linha["equipamento"]?.ToString() ?? "" : "";
 
-                    if (linha.ContainsKey("equipamento"))
+                    // Tag de exemplo (não é equipamento real)
+                    if (equipamento.StartsWith("Tag selecionada"))
                     {
-                        linhaTags["equipamento"] = linha["equipamento"];
-                    }
-
-                    foreach (var coluna in linha)
-                    {
-                        if (coluna.Key.EndsWith("_displayname"))
+                        if (linha.TryGetValue("tag_d", out var displayNameObj) &&
+                            linha.TryGetValue("tag_t", out var tipoObj))
                         {
-                            var baseTag = coluna.Key.Replace("_displayname", "");
-                            var displayName = coluna.Value?.ToString();
+                            string displayName = displayNameObj?.ToString() ?? "";
+                            string tipo = tipoObj?.ToString() ?? "";
 
-                            if (!string.IsNullOrWhiteSpace(displayName) &&
-                                linha.ContainsKey($"{baseTag}_valor"))
+                            tagsSelecionadas[$"Tag selecionada {contador:00}"] = new
                             {
-                                var valor = linha[$"{baseTag}_valor"]?.ToString();
-                                var tipo = linha.ContainsKey($"{baseTag}_tipo") ? linha[$"{baseTag}_tipo"]?.ToString() : "";
-
-                                linhaTags[displayName] = new
-                                {
-                                    valor,
-                                    tipo
-                                };
-                            }
+                                nome = displayName.Trim('"'),
+                                tipo = tipo
+                            };
+                            contador++;
                         }
+                        continue;
                     }
 
-                    listaSomenteTags.Add(linhaTags);
+                    // Equipamento real
+                    if (!equipamentosDict.ContainsKey(equipamento))
+                        equipamentosDict[equipamento] = new Dictionary<string, object> { ["equipamento"] = equipamento };
+
+                    if (linha.TryGetValue("tag_d", out var tagNomeObj))
+                    {
+                        string nomeTag = tagNomeObj?.ToString() ?? "";
+                        var valor = linha.ContainsKey("tag_v") ? linha["tag_v"] : null;
+
+                        equipamentosDict[equipamento][nomeTag] = valor;
+                    }
                 }
+
+                var equipamentos = equipamentosDict.Values.ToList();
 
                 return Ok(new
                 {
                     status = 200,
                     message = $"Dados da tabela '{tableName}' obtidos com sucesso.",
-                    data = listaSomenteTags
+                    tagsSelecionadas,
+                    equipamentos
                 });
             }
             catch (Exception ex)

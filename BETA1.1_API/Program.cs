@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using CoreServices;
 using CoreServices.Services;
 using MyOpcUaApi.Controllers;
-using MyOpcUaApi.Services; // Caso você mova o background service pra uma pasta de services
+using MyOpcUaApi.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
 
@@ -13,12 +13,12 @@ var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 var connectionString = configuration.GetConnectionString("DefaultConnection");
 
-// ?? Serviços base
+// ? Serviços base
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddMemoryCache();
 
-// ?? Swagger
+// ? Swagger
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
@@ -34,24 +34,17 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// ?? OPC UA
+// ? OPC UA
 builder.Services.AddSingleton<OpcUaClient>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
     return new OpcUaClient(config, msg => Console.WriteLine(msg));
 });
 
-// ?? Monitoramento Status Manager (controle de ativação)
+// ? Monitoramento Status Manager
 builder.Services.AddSingleton<MonitoramentoStatusManager>();
 
-// ?? MonitoramentoService
-builder.Services.AddSingleton<MonitoramentoService>(sp =>
-{
-    var opcUaClient = sp.GetRequiredService<OpcUaClient>();
-    return new MonitoramentoService(opcUaClient, new List<DatabaseManager>());
-});
-
-// ?? DatabaseManager
+// ? DatabaseManager (tem que vir antes do ApplicationManager)
 builder.Services.AddSingleton<DatabaseManager>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
@@ -69,33 +62,43 @@ builder.Services.AddSingleton<DatabaseManager>(sp =>
     return new DatabaseManager(connString);
 });
 
-// ?? ApplicationManager (core de controle)
+// ? ApplicationManager (passa MonitoramentoService como null inicialmente)
 builder.Services.AddSingleton<ApplicationManager>(sp =>
 {
     var opcUaClient = sp.GetRequiredService<OpcUaClient>();
-    var monitoramentoService = sp.GetRequiredService<MonitoramentoService>();
     var databaseManager = sp.GetRequiredService<DatabaseManager>();
-    return new ApplicationManager(opcUaClient, monitoramentoService, databaseManager);
+    return new ApplicationManager(opcUaClient, databaseManager); // ?? monitoramento será setado depois
 });
 
-// ?? Serviço de Background
+// ? MonitoramentoService (depois que ApplicationManager estiver disponível)
+builder.Services.AddSingleton<MonitoramentoService>(sp =>
+{
+    var opcUaClient = sp.GetRequiredService<OpcUaClient>();
+    var appManager = sp.GetRequiredService<ApplicationManager>();
+    var monitoramentoService = new MonitoramentoService(opcUaClient, appManager);
+
+    appManager.SetMonitoramentoService(monitoramentoService); // ?? vínculo circular resolvido com setter
+    return monitoramentoService;
+});
+
+// ? Serviço de Background
 builder.Services.AddHostedService<MonitoramentoBackgroundService>();
 
-// ?? Outros
+// ? Outros
 builder.Services.AddScoped<DatabaseOrchestratorService>();
 
-// ?? CORS
+// ? CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        policy => policy.AllowAnyOrigin()
-                        .AllowAnyMethod()
-                        .AllowAnyHeader());
+    options.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader());
 });
 
 var app = builder.Build();
 
-// ?? Swagger
+// ? Swagger
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
@@ -103,12 +106,12 @@ app.UseSwaggerUI(c =>
     c.RoutePrefix = "swagger";
 });
 
-// ?? Middlewares
+// ? Middlewares
 app.UseCors("AllowAll");
 app.UseAuthorization();
 app.MapControllers();
 
-// ?? URL explicita
+// ? URL explícita
 try
 {
     var url = "http://0.0.0.0:5000";

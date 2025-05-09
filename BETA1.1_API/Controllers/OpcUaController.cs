@@ -1,16 +1,13 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using System.Threading.Tasks;
+﻿using BETA1._1_API.Models;
 using CoreServices;
+using CoreServices.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using MyOpcUaApi.Models;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using BETA1._1_API.Models;
-using Microsoft.Extensions.Caching.Memory;
-using System.Linq;
-using CoreServices.Services;
-using static CoreServices.Services.OpcUaClient;
-using CoreServices.Models;
 using System.Text.RegularExpressions;
+using static CoreServices.Services.OpcUaClient;
 
 
 namespace MyOpcUaApi.Controllers
@@ -295,7 +292,10 @@ namespace MyOpcUaApi.Controllers
 
 
         [HttpGet("nodes/{nodeId}/children")]
-        public IActionResult GetNodeChildren([FromRoute] string nodeId, [FromQuery] bool? refresh = false)
+        public IActionResult GetNodeChildren(
+    [FromRoute] string nodeId,
+    [FromQuery] string? tabela = null,
+    [FromQuery] bool? refresh = false)
         {
             if (string.IsNullOrEmpty(nodeId))
             {
@@ -319,7 +319,6 @@ namespace MyOpcUaApi.Controllers
                     });
                 }
 
-                // 🔒 Verifica se há uma sessão ativa com o CLP
                 if (!_appManager.IsOpcUaConnected())
                 {
                     return StatusCode(503, new
@@ -329,24 +328,28 @@ namespace MyOpcUaApi.Controllers
                     });
                 }
 
-                // 🔒 Normaliza a chave de cache
                 string cacheKey = $"opcua_children_{nodeId.Trim().Replace("\"", "")}";
 
-                // 🧠 Usa o cache se o refresh for false ou não informado
-                if (refresh == false && _memoryCache.TryGetValue(cacheKey, out List<OpcUaNodeDto>? cachedNodes))
+                if (refresh == false && _memoryCache.TryGetValue(cacheKey, out List<OpcUaNodeDto>? cachedBase))
                 {
-                    Console.WriteLine($"[CACHE] Retornando filhos de {nodeId} do cache.");
+                    var clonedNodes = DeepCloneOpcUaNodes(cachedBase); // ✅ CLONE antes de mexer
+
+                    if (!string.IsNullOrWhiteSpace(tabela))
+                    {
+                        MarcarTagsSelecionadas(clonedNodes, tabela); // ✅ Agora sim
+                    }
+
                     return Ok(new
                     {
                         status = 200,
                         message = "Filhos obtidos do cache.",
                         serverUrl,
                         nodeId,
-                        children = cachedNodes
+                        children = clonedNodes
                     });
                 }
 
-                // 🔁 Caso refresh seja true ou não tenha nada salvo
+
                 Console.WriteLine($"[BUSCA] Buscando filhos de {nodeId} com profundidade 2...");
                 var children = _appManager.GetOpcUaNodeHierarchy(nodeId, 2);
 
@@ -360,11 +363,18 @@ namespace MyOpcUaApi.Controllers
                     });
                 }
 
-                // 🧠 Salva os dados com SlidingExpiration de 1 hora
-                _memoryCache.Set(cacheKey, children, new MemoryCacheEntryOptions
+                // 🔁 Armazena no cache a versão limpa (sem marcações)
+                _memoryCache.Set(cacheKey, DeepCloneOpcUaNodes(children), new MemoryCacheEntryOptions
                 {
                     SlidingExpiration = TimeSpan.FromHours(1)
                 });
+
+                // 🔍 Marca se necessário para a resposta atual
+                var responseNodes = DeepCloneOpcUaNodes(children);
+                if (!string.IsNullOrWhiteSpace(tabela))
+                {
+                    MarcarTagsSelecionadas(responseNodes, tabela);
+                }
 
                 return Ok(new
                 {
@@ -372,7 +382,7 @@ namespace MyOpcUaApi.Controllers
                     message = "Filhos obtidos com sucesso do CLP.",
                     serverUrl,
                     nodeId,
-                    children
+                    children = responseNodes
                 });
             }
             catch (Exception ex)
@@ -386,8 +396,61 @@ namespace MyOpcUaApi.Controllers
             }
         }
 
+        private List<OpcUaNodeDto> DeepCloneOpcUaNodes(List<OpcUaNodeDto> nodes)
+        {
+            return nodes.Select(n => new OpcUaNodeDto
+            {
+                NodeId = n.NodeId,
+                DisplayName = n.DisplayName,
+                HasChildren = n.HasChildren,
+                NodeClass = n.NodeClass,
+                DataType = n.DataType,
+                Value = n.Value,
+                Selected = false, // sempre limpo
+                Children = n.Children != null ? DeepCloneOpcUaNodes(n.Children) : new List<OpcUaNodeDto>()
+            }).ToList();
+        }
 
 
+        private void MarcarTagsSelecionadas(List<OpcUaNodeDto> nodes, string tabela)
+        {
+            try
+            {
+                string connStr = _appManager.GetCurrentDatabaseConnectionString();
+                var linhas = _appManager.GetDatabaseManager().GetTableData(tabela, connStr);
+
+                var tagsSalvas = linhas
+    .Where(l => l.ContainsKey("equipamento") && l["equipamento"]?.ToString()?.StartsWith("Tag selecionada") == true)
+    .Select(l => l.ContainsKey("tag") ? l["tag"]?.ToString() : null)
+    .Where(t => !string.IsNullOrWhiteSpace(t))
+    .ToHashSet();
+
+
+                void AplicarMarcacao(List<OpcUaNodeDto> lista)
+                {
+                    foreach (var node in lista)
+                    {
+                        if (node.HasChildren && node.Children?.Any() == true)
+                        {
+                            AplicarMarcacao(node.Children);
+                        }
+
+                        var normalizado = node.NodeId?.Replace("\"", "").Trim().ToLowerInvariant();
+
+                        if (!node.HasChildren && tagsSalvas.Contains(normalizado))
+                        {
+                            node.Selected = true;
+                        }
+                    }
+                }
+
+                AplicarMarcacao(nodes);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao marcar tags como selecionadas: {ex.Message}");
+            }
+        }
 
 
         [HttpPost("nodes/variables/select")]
@@ -399,6 +462,15 @@ namespace MyOpcUaApi.Controllers
                 {
                     status = 400,
                     message = "As tags selecionadas não podem ser nulas ou vazias."
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TableName))
+            {
+                return BadRequest(new ErrorResponse
+                {
+                    status = 400,
+                    message = "O nome da tabela (TableName) é obrigatório."
                 });
             }
 
@@ -426,25 +498,49 @@ namespace MyOpcUaApi.Controllers
                         nodeId: variable.NodeId,
                         nomeNormalizado: nomeNormalizado,
                         tipoDado: variable.DataType,
-                        nomeTabelaOrigem: request.TableName ?? "tabela_padrao",
+                        nomeTabelaOrigem: request.TableName,
                         displayName: variable.DisplayName
                     ));
                 }
 
                 _memoryCache.Set("selected_tags", selectedTagObjects, TimeSpan.FromMinutes(5));
+                _memoryCache.Set("selected_tableName", request.TableName.Trim(), TimeSpan.FromMinutes(5));
 
-                if (!string.IsNullOrWhiteSpace(request.TableName))
+                // Cria a tabela e insere uma linha para cada tag selecionada
+                var createResponse = await orchestrator.ExecuteCreateTableAndInsertRowsAsync();
+
+                // Cria a tabela de limites se ainda não existir
+                try
                 {
-                    _memoryCache.Set("selected_tableName", request.TableName.Trim(), TimeSpan.FromMinutes(5));
+                    var connectionString = _appManager.GetCurrentDatabaseConnectionString();
+                    var sqlCreateLimite = @"
+        CREATE TABLE IF NOT EXISTS ""limite"" (
+            id SERIAL PRIMARY KEY,
+            nome_tabela VARCHAR(100) NOT NULL,
+            tag VARCHAR(300) NOT NULL,
+            valor TEXT,
+            limite_violado VARCHAR(3),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );";
+
+                    await _databaseManager.ExecuteNonQueryAsync(sqlCreateLimite, connectionString);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO] Falha ao criar a tabela de limite: {ex.Message}");
+                    return StatusCode(500, new ErrorResponse
+                    {
+                        status = 500,
+                        message = "Erro ao criar a tabela de limite.",
+                        error = ex.Message
+                    });
                 }
 
-                // Agora só cria a tabela, sem inserir dados
-                var createResponse = await orchestrator.ExecuteCreateTableOnlyAsync();
 
                 return Ok(new
                 {
                     status = 200,
-                    message = "Tabela criada com sucesso com as colunas correspondentes às tags selecionadas.",
+                    message = "Tabela criada e tags inseridas como linhas com sucesso.",
                     selectedTags = selectedTagObjects,
                     tableName = request.TableName,
                     result = createResponse
@@ -461,15 +557,19 @@ namespace MyOpcUaApi.Controllers
             }
         }
 
+
+
         [HttpPost("database/equipamento/adicionar")]
-        public async Task<IActionResult> AdicionarEquipamento([FromBody] NovoEquipamentoRequest request)
+        public async Task<IActionResult> AdicionarEquipamento([FromBody] EquipamentoInsertRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.TableName) || string.IsNullOrWhiteSpace(request.NovoPrefixo) || string.IsNullOrWhiteSpace(request.NomeEquipamento))
+            if (string.IsNullOrWhiteSpace(request.TableName) ||
+                string.IsNullOrWhiteSpace(request.Prefixo) ||
+                request.Tags == null || !request.Tags.Any())
             {
                 return BadRequest(new ErrorResponse
                 {
                     status = 400,
-                    message = "Todos os campos (TableName, NovoPrefixo, NomeEquipamento) são obrigatórios."
+                    message = "Campos obrigatórios: TableName, Prefixo e ao menos uma Tag."
                 });
             }
 
@@ -483,110 +583,69 @@ namespace MyOpcUaApi.Controllers
                 });
             }
 
-            var tagColunas = _databaseManager.GetTagColumnsFromTable(request.TableName, connectionString);
+            var linhasInseridas = new List<Dictionary<string, object>>();
 
-            if (tagColunas == null || !tagColunas.Any())
+            foreach (var tag in request.Tags)
             {
-                return NotFound(new ErrorResponse
-                {
-                    status = 404,
-                    message = $"Nenhuma tag foi encontrada na tabela '{request.TableName}'."
-                });
-            }
-
-            string tagExemplo = tagColunas.First();
-            var match = Regex.Match(tagExemplo, "s=\\\"(.*?)\\\"");
-            if (!match.Success)
-            {
-                return StatusCode(500, new ErrorResponse
-                {
-                    status = 500,
-                    message = "Não foi possível detectar o prefixo da tag de exemplo."
-                });
-            }
-
-            string trechoAntigo = match.Groups[1].Value;
-
-            var valoresParaInserir = new Dictionary<string, object>
-    {
-        { "equipamento", request.NomeEquipamento }
-    };
-
-            var valoresParaRetorno = new Dictionary<string, object>
-    {
-        { "equipamento", request.NomeEquipamento }
-    };
-
-            foreach (var coluna in tagColunas)
-            {
-                if (!coluna.Contains("s=\"") || coluna.EndsWith("_valor") || coluna.EndsWith("_displayname") || coluna.EndsWith("_tipo"))
-                    continue;
-
-                string novaTag = coluna.Replace(trechoAntigo, request.NovoPrefixo);
-
                 try
                 {
+                    string novaTag = $"ns=3;s=\"{request.Prefixo}\".\"{tag.DisplayName}\"";
+
                     var valorLido = await _appManager.ReadOpcUaTag(novaTag);
                     var valorConvertido = DatabaseManager.ConvertTagValue(valorLido);
-                    var displayName = _appManager.GetOpcUaNodeDisplayName(novaTag);
                     var tipo = valorLido?.GetType().Name ?? "null";
 
-                    Console.WriteLine($"[DEBUG] Tag original da tabela: {coluna}");
-                    Console.WriteLine($"[DEBUG] Nova tag gerada: {novaTag}");
-                    Console.WriteLine($"[DEBUG] Valor lido do CLP: {valorLido} | Tipo: {tipo}");
-                    Console.WriteLine($"[DEBUG] Valor convertido: {valorConvertido}");
-                    Console.WriteLine($"[DEBUG] Display Name: {displayName}");
+                    // Extrai equipamento (ex: "001-RO04-Acionamento" → "RO")
+                    var match = Regex.Match(request.Prefixo, @"-(\D+)\d+");
+                    string equipamento = match.Success ? match.Groups[1].Value : "EquipamentoDesconhecido";
 
-                    string colunaValor = $"{coluna}_valor";
-                    string colunaDisplayName = $"{coluna}_displayname";
-                    string colunaTipo = $"{coluna}_tipo";
+                    var novaLinha = new Dictionary<string, object>
+            {
+                { "equipamento", equipamento },
+                { "tag", novaTag },
+                { "tag_v", valorConvertido },
+                { "tag_d", tag.DisplayName },
+                { "tag_t", tipo },
+                { "tag_min", string.IsNullOrWhiteSpace(tag.Min) ? (object)DBNull.Value : tag.Min },
+                { "tag_max", string.IsNullOrWhiteSpace(tag.Max) ? (object)DBNull.Value : tag.Max }
+            };
 
-                    valoresParaInserir[coluna] = novaTag;
-                    valoresParaInserir[colunaValor] = valorConvertido;
-                    valoresParaInserir[colunaDisplayName] = displayName;
-                    valoresParaInserir[colunaTipo] = tipo;
-
-                    valoresParaRetorno[coluna] = novaTag;
-                    valoresParaRetorno[colunaValor] = valorConvertido;
-                    valoresParaRetorno[colunaDisplayName] = displayName;
-                    valoresParaRetorno[colunaTipo] = tipo;
-
-                    Console.WriteLine($"[INSERT] {colunaValor} => {valorConvertido}");
-                    Console.WriteLine($"[INSERT] {colunaDisplayName} => {displayName}");
-                    Console.WriteLine($"[INSERT] {colunaTipo} => {tipo}");
+                    await _databaseManager.InsertRowAsync(request.TableName, novaLinha, connectionString);
+                    linhasInseridas.Add(novaLinha);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return BadRequest(new ErrorResponse
+                    Console.WriteLine($"[ERRO] Falha ao processar tag '{tag.DisplayName}': {ex.Message}");
+                    return StatusCode(500, new ErrorResponse
                     {
-                        status = 400,
-                        message = $"A tag '{novaTag}' não pôde ser lida ou não existe no CLP."
+                        status = 500,
+                        message = $"Erro ao processar a tag '{tag.DisplayName}'",
+                        error = ex.Message
                     });
                 }
             }
 
-
-
-            try
+            return Ok(new
             {
-                await _databaseManager.InsertRowAsync(request.TableName, valoresParaInserir, connectionString);
+                status = 200,
+                message = "Equipamento inserido com sucesso.",
+                linhasInseridas
+            });
+        }
 
-                return Ok(new
-                {
-                    status = 200,
-                    message = $"Equipamento '{request.NomeEquipamento}' adicionado com sucesso na tabela '{request.TableName}'.",
-                    valores = valoresParaRetorno
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new ErrorResponse
-                {
-                    status = 500,
-                    message = "Erro ao inserir o equipamento na tabela.",
-                    error = ex.Message
-                });
-            }
+
+        public class EquipamentoInsertRequest
+        {
+            public string TableName { get; set; } = string.Empty;
+            public string Prefixo { get; set; } = string.Empty;
+            public List<TagLimiteInfo> Tags { get; set; } = new();
+        }
+
+        public class TagLimiteInfo
+        {
+            public string DisplayName { get; set; } = string.Empty;
+            public string Min { get; set; } = "null";
+            public string Max { get; set; } = "null";
         }
 
 

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Caching.Memory;
 using MyOpcUaApi.Models;
 using Npgsql;
 using static MyOpcUaApi.Controllers.DatabaseController;
+using CoreServices.Models;
 
 public class DatabaseOrchestratorService
 {
@@ -112,26 +113,22 @@ ON CONFLICT (node_id) DO UPDATE SET tipo_dado = EXCLUDED.tipo_dado, display_name
 
         string formattedTableName = _databaseManager.NormalizeTagName(tableName);
 
-        // Cria colunas reais usando o NodeId diretamente, sem normalizar
         var columns = new List<CoreServices.Models.TagInfo>();
 
         foreach (var tag in selectedTags)
         {
             string nodeId = tag.NodeId;
 
-            // Evita criar colunas baseadas em campos auxiliares
-            if (nodeId.EndsWith("_valor") || nodeId.EndsWith("_displayname") || nodeId.EndsWith("_tipo"))
+            if (nodeId.EndsWith("_v") || nodeId.EndsWith("_d") || nodeId.EndsWith("_t"))
                 continue;
 
             string escaped = nodeId.Replace("\"", "\"\"");
 
-            columns.Add(new(0, escaped, escaped, "text", formattedTableName));                    // tag
-            columns.Add(new(0, $"{escaped}_valor", $"{escaped}_valor", "text", formattedTableName));   // valor
-            columns.Add(new(0, $"{escaped}_displayname", $"{escaped}_displayname", "text", formattedTableName)); // displayname
-            columns.Add(new(0, $"{escaped}_tipo", $"{escaped}_tipo", "text", formattedTableName));     // tipo
+            columns.Add(new(0, escaped, escaped, "text", formattedTableName));                        // tag
+            columns.Add(new(0, $"{escaped}_v", $"{escaped}_v", "text", formattedTableName));          // valor
+            columns.Add(new(0, $"{escaped}_d", $"{escaped}_d", "text", formattedTableName));          // displayname
+            columns.Add(new(0, $"{escaped}_t", $"{escaped}_t", "text", formattedTableName));          // tipo
         }
-
-
 
         if (!_databaseManager.TableExists(formattedTableName, connectionString))
             _databaseManager.CreateTable(formattedTableName, columns, connectionString);
@@ -143,6 +140,74 @@ ON CONFLICT (node_id) DO UPDATE SET tipo_dado = EXCLUDED.tipo_dado, display_name
         {
             status = 200,
             message = $"Tabela '{formattedTableName}' criada com sucesso.",
+            tableName = formattedTableName
+        };
+    }
+
+
+
+    public async Task<CreateInsertResponse> ExecuteCreateTableAndInsertRowsAsync()
+    {
+        if (!_memoryCache.TryGetValue("selected_tags", out List<TagInfoRequest>? selectedTags) || selectedTags == null || !selectedTags.Any())
+            throw new InvalidOperationException("Nenhuma tag selecionada encontrada ou a seleção expirou.");
+
+        if (!_memoryCache.TryGetValue("selected_tableName", out string? tableName) || string.IsNullOrWhiteSpace(tableName))
+            throw new InvalidOperationException("Nome da tabela não encontrado no cache.");
+
+        string connectionString = _appManager.GetCurrentDatabaseConnectionString();
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("Nenhuma conexão ativa com o banco de dados.");
+
+        string formattedTableName = _databaseManager.NormalizeTagName(tableName);
+
+        // Define as colunas fixas da tabela
+        var columns = new List<TagInfo>
+    {
+        new(0, "equipamento", "equipamento", "TEXT", formattedTableName),
+        new(0, "tag", "tag", "TEXT", formattedTableName),
+        new(0, "tag_v", "tag_v", "TEXT", formattedTableName),
+        new(0, "tag_d", "tag_d", "TEXT", formattedTableName),
+        new(0, "tag_t", "tag_t", "TEXT", formattedTableName),
+    };
+
+        if (!_databaseManager.TableExists(formattedTableName, connectionString))
+            _databaseManager.CreateTable(formattedTableName, columns, connectionString);
+
+        int contador = 1;
+        foreach (var tag in selectedTags)
+        {
+            try
+            {
+                var valorLido = await _appManager.ReadOpcUaTag(tag.NodeId);
+                var valorConvertido = DatabaseManager.ConvertTagValue(valorLido);
+                var displayName = _appManager.GetOpcUaNodeDisplayName(tag.NodeId);
+                var tipo = valorLido?.GetType().Name ?? "null";
+
+                var valores = new Dictionary<string, object>
+            {
+                { "equipamento", $"Tag selecionada {contador:00}" },
+                { "tag", tag.NodeId },
+                { "tag_v", valorConvertido },
+                { "tag_d", displayName },
+                { "tag_t", tipo },
+            };
+
+                await _databaseManager.InsertRowAsync(formattedTableName, valores, connectionString);
+                contador++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao ler/inserir a tag {tag.NodeId}: {ex.Message}");
+            }
+        }
+
+        _memoryCache.Remove("selected_tags");
+        _memoryCache.Remove("selected_tableName");
+
+        return new CreateInsertResponse
+        {
+            status = 200,
+            message = $"Tabela '{formattedTableName}' criada com sucesso e tags de exemplo inseridas.",
             tableName = formattedTableName
         };
     }

@@ -43,7 +43,7 @@ public class MonitoramentoBackgroundService : BackgroundService
                 }
             }
 
-            await Task.Delay(2000, stoppingToken); // Verifica a cada 2 segundos
+            await Task.Delay(100, stoppingToken); // Verifica a cada 2 segundos
         }
 
         Console.WriteLine("[INFO] Serviço de monitoramento finalizado.");
